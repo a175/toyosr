@@ -1,13 +1,16 @@
 # toyosr
-Mock up of simple optical scoresheet reader / optical character recognizer (ocr)
+Mock-up of simple optical scoresheet reader / optical character recognizer (ocr)
 
 
 
 ## Python
 
+`pdf2image` がいる.
+
+### pip について.
 PEP668によって,
 `pip install --user` が使えなくなったので, 
-パッケージを入れるにはvenvを使うのがよいよう.
+パッケージを入れるにはvenvを使ってからやるのがよいよう.
 
 最初にセットアップ
 ```
