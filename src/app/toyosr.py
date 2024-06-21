@@ -24,6 +24,9 @@ class OneCharRecognizer:
         return int(ind[-1])
 
 class OSRbase:
+    def __init__(self):
+        self.ocr = OneCharRecognizer()
+
     def detect_position_markers(self,frame):
         """
         returns pair of dict D and list L, D[k1][k2] is rect of qrcode for problem k1 at k2, L is list of strings for all qrcodes. 
@@ -215,10 +218,8 @@ class OSRbase:
 
 
 class InteractiveOSR(OSRbase):
-    def __init__(self,questions):
-        self.target_keys = {}
-        for questionid in questions:
-            self.target_keys[questionid]=[k for qi in questions[questionid] for (k,a) in qi]
+    def __init__(self):
+        super().__init__()
     
     def detect_with_gui(self):
         pass
@@ -271,104 +272,69 @@ class InteractiveOSR(OSRbase):
         self.detected_data = {}
         self.marking_boxes = {}
 
-    def draw_detected_data(self,frame):
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        for questionid in self.marking_boxes.keys():
-            for k in self.marking_boxes[questionid].keys():
-                (x1,x2,y1,y2)=self.marking_boxes[questionid][k]
-                if k in self.fixed_keys[questionid]:
-                    frame=cv2.line(frame,(x1,y1),(x2,y2),(256,128,128),2)
-                if k in self.detected_data[questionid]:
-                    frame=cv2.rectangle(frame,(x1,y1),(x2,y2),(255,255,255),3)
-                    frame=cv2.rectangle(frame,(x1,y1),(x2,y2),(255,255,0),2)
-                    frame=cv2.putText(frame,"{:s}-{:s}".format(k[0],k[1]),(x1,y1-6),font,.3,(255,0,255),1,cv2.LINE_AA)
-                else:
-                    frame=cv2.rectangle(frame,(x1,y1),(x2,y2),(255,255,255),3)
-                    frame=cv2.rectangle(frame,(x1,y1),(x2,y2),(0,80,160),1)
-        s="/".join([ k for k in self.detected_strings if not k.startswith("marker:")])
-        frame=cv2.putText(frame,s,(0,70),font,1.0,(255,255,255),4,cv2.LINE_AA)
-        frame=cv2.putText(frame,s,(0,70),font,1.0,(64,64,128),2,cv2.LINE_AA)
-        return frame
-
-    def draw_markers(self,frame,position_markers,hmarkers,vmarkers):
+    def draw_markers(self,frame,position_markers):
         font = cv2.FONT_HERSHEY_SIMPLEX
         for k in position_markers.keys():
             (x,y,w,h) = position_markers[k]
             frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),1)
             frame=cv2.putText(frame,k,(x,y-6),font,.3,(255,0,0),1,cv2.LINE_AA)
-                
-        
-        for k in hmarkers.keys():
-            for (d,a,b) in hmarkers[k]:
-                frame=cv2.line(frame,(d,a),(d,b),(128,128,0),4)
-                frame=cv2.putText(frame,k,(d+10,a+6),font,.3,(255,0,255),1,cv2.LINE_AA)
-        for k in vmarkers.keys():
-            for (d,a,b) in vmarkers[k]:
-                frame=cv2.line(frame,(a,d),(b,d),(128,128,0),4)
-                frame=cv2.putText(frame,k,(a,d-6),font,.3,(255,0,255),1,cv2.LINE_AA)
         return frame
 
 
 class OSR4Png(InteractiveOSR):
-    def __init__(self,filename,questions):
-        super().__init__(questions)
-        self.questions = questions
+    def __init__(self,filename):
+        super().__init__()
         image = Image.open(filename)
         self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR)]
-        self.ocr = OneCharRecognizer()
 
+    def normalize_angle(self,img):
+        rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
+        needs_rotate_90 = False
+        self.reset_detected_data()
+        (img,rotation_mat,needs_rotate_90)=self.modify_angle(img,rotation_mat,needs_rotate_90)
+        return img
+
+    def detect_a_line(self,line_img,width):
+        tseg = self.get_box_coordinates_h(line_img,width)
+        detected_tokens = []
+        box_coord = []
+        for (left,right) in tseg:
+            box_img=line_img[:,left:right]
+            (left_l,right_l,top_l,bottom_l)=self.get_inside_box_coordinates(box_img)
+            box_img = box_img[top_l:bottom_l,left_l:right_l]
+            box_coord.append(((left+left_l,top_l,right_l-left_l,bottom_l-top_l),box_img))
+
+            preprocessed = self.get_preprocessed_box_img(box_img)
+            num=self.detect_char(preprocessed)
+            detected_tokens.append(num)
+            #cv2.imshow('box_img', box_img)
+            #cv2.imshow('box_img_x', preprocessed)
+            #keyinput= cv2.waitKey(0)
+            #if keyinput & 0xFF == ord('q'):
+            #    return
+        return(detected_tokens,box_coord)
+
+    def detect_a_page(self,img):
+        img_c = self.normalize_angle(img)
+        img = cv2.cvtColor(img_c, cv2.COLOR_BGR2GRAY)
+        img = self.reduct_noise(img)
+        (position_markers,strings)=self.detect_position_markers(img)
+        lines=self.get_line_coordinates(position_markers)
+        box_coord = []
+        detected_data = []
+        for (ltop,lbottom,lleft,lright,width) in lines:
+            line_img = img[ltop:lbottom,lleft:lright]
+            (detected_tokens,bc)=self.detect_a_line(line_img,width)
+            detected_data.append(detected_tokens)
+            box_coord=box_coord+[ ((l+lleft,t+ltop,w,h),boximg) for ((l,t,w,h),boximg) in bc]
+        return (detected_data,box_coord,position_markers,img_c)
+    
     def detect_with_gui(self):
         font = cv2.FONT_HERSHEY_SIMPLEX
         for pagenum,frame in enumerate(self.scannedimages):
-            rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
-            needs_rotate_90 = False
-            self.reset_detected_data()
-            (frame,rotation_mat,needs_rotate_90)=self.modify_angle(frame,rotation_mat,needs_rotate_90)
-            img_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            img_gray = self.reduct_noise(img_gray)
-            (position_markers,strings)=self.detect_position_markers(img_gray)
-            #self.update_detected_strings(strings)
-            width=0
-            n=0
-            max_top=0
-            max_height=0
-            for k in position_markers.keys():
-                n=n+1
-                width=width+position_markers[k]["x"].width
-                if max_height < position_markers[k]["x"].height:
-                    max_height = position_markers[k]["x"].height
-                if max_top < position_markers[k]["x"].top:
-                    max_top = position_markers[k]["x"].top
-            frame = frame[0:max_top+13*max_height//10,:]
-            img_gray = img_gray[0:max_top+2*max_height,:]
-            width=width/n
-            
-            lines=self.get_line_coordinates(position_markers)
-            box_coord = []
-            detected_data = []
-            for (ltop,lbottom,lleft,lright,width) in lines:
-                detected_tokens = []
-                print(lleft,lright,ltop,lbottom)
-                line_img = img_gray[ltop:lbottom,lleft:lright]
-                tseg = self.get_box_coordinates_h(line_img,width)
-                for (left,right) in tseg:
-                    box_img=line_img[:,left:right]
-                    (left_l,right_l,top_l,bottom_l)=self.get_inside_box_coordinates(box_img)
-                    box_img = box_img[top_l:bottom_l,left_l:right_l]
-                    box_coord.append(((lleft+left+left_l,ltop+top_l,right_l-left_l,bottom_l-top_l),box_img))
-
-                    preprocessed = self.get_preprocessed_box_img(box_img)
-                    num=self.detect_char(preprocessed)
-                    detected_tokens.append(num)
-                    #cv2.imshow('box_img', box_img)
-                    #cv2.imshow('box_img_x', preprocessed)
-                    #keyinput= cv2.waitKey(0)
-                    #if keyinput & 0xFF == ord('q'):
-                    #    return
-                detected_data.append(detected_tokens)
-
+            (detected_data,box_coord,position_markers,img)=self.detect_a_page(frame)
             print(detected_data)
-            frame_modified = frame
+            frame_modified = img
             #frame_modified = img_gray
             while True:
                 frame = frame_modified.copy()
@@ -379,12 +345,11 @@ class OSR4Png(InteractiveOSR):
                 for qid in position_markers.keys():
                     hmarkers={}
                     vmarkers={}
-                    frame = self.draw_markers(frame,position_markers[qid],hmarkers,vmarkers)
+                    frame = self.draw_markers(frame,position_markers[qid])
                     pass
                 for ((x,y,w,h),img) in box_coord:
                     frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,0,255),1)
 
-                frame=self.draw_detected_data(frame)
                 cv2.imshow('toyomr scan image', frame)
                 # quit
                 keyinput=cv2.waitKey(1)
@@ -410,15 +375,7 @@ def main_png():
         print(usage)
         return
     filename = sys.argv[1]
-    question = [ [(chr(ord("A")+i),"{:d}{:d}".format(j,k))  for k in range(1,5)] for j in range(1,6) for i in range(10)]
-    question_a = [[ (qij,"{:d}".format(j+1)) for (j,qij) in enumerate(qi) ] for qi in question]
-    a=[["0","1","2","3","4","5","6"],["7","8","9","A"],["B","C","D"],["E","F"]]
-    b=[["G","H","I"],["J","K","L","M"],["N","O"],["P","Q","R"]]
-    question =[[("Y",aij) for aij in ai] for ai in a]+[ [("Z",bij) for bij in bi]for bi in b]
-    question_b = [[ (qij,"{:d}".format(j+1)) for (j,qij) in enumerate(qi) ] for qi in question]
-    questions = {"B":question_a,"A":question_b}
-
-    osr = OSR4Png(filename,questions)
+    osr = OSR4Png(filename)
     osr.detect_with_gui()
 
 def main():
