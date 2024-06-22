@@ -23,6 +23,7 @@ class OneCharRecognizer:
         ind = numpy.argsort(pred)
         return int(ind[-1])
 
+
 class OSRbase:
     def __init__(self):
         self.num_ocr = OneCharRecognizer('dnn/mnist_100.onnx')
@@ -250,7 +251,6 @@ class OSRbase:
     def normalize_angle(self,img):
         rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
         needs_rotate_90 = False
-        self.reset_detected_data()
         (img,rotation_mat,needs_rotate_90)=self.modify_angle(img,rotation_mat,needs_rotate_90)
         return img
 
@@ -368,19 +368,13 @@ class InteractiveOSR(OSRbase):
         return (cv2.warpAffine(frame,rotation_mat,(w,h),borderValue=(255,255,255)),rotation_mat,needs_rotate_90)
     
 
-    def reset_detected_data(self):
-        self.detected_strings = []
-        self.fixed_keys = {}
-        self.detected_data = {}
-        self.marking_boxes = {}
 
 
-
-class OSR4Png(InteractiveOSR):
+class OSR4Pdf(InteractiveOSR):
     def __init__(self,filename):
         super().__init__()
-        image = Image.open(filename)
-        self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR)]
+        pdfimages = pdf2image.convert_from_path(filename,dpi=600)
+        self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR) for image in pdfimages]
 
     
     def detect_with_gui(self):
@@ -428,13 +422,13 @@ class OSR4Png(InteractiveOSR):
                     break
 
     
-def main_png():
+def main_pdf():
     if len(sys.argv) < 2:
         usage="{:s} devicenum".format(sys.argv[0])
         print(usage)
         return
     filename = sys.argv[1]
-    osr = OSR4Png(filename)
+    osr = OSR4Pdf(filename)
     osr.detect_with_gui()
 
 def main():
@@ -444,8 +438,6 @@ def main():
         return
     if sys.argv[1].endswith(".pdf"):
         main_pdf()
-    if sys.argv[1].endswith(".png"):
-        main_png()
     else:
         main_cap()
 
