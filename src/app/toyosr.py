@@ -8,8 +8,8 @@ import pdf2image
 
 
 class OneCharRecognizer:
-    def __init__(self):
-        self.model_file = 'dnn/mnist_100.onnx'
+    def __init__(self,model_file):
+        self.model_file = model_file
         self.net = None
 
     def detect_char(self,box_img):
@@ -25,27 +25,24 @@ class OneCharRecognizer:
 
 class OSRbase:
     def __init__(self):
-        self.ocr = OneCharRecognizer()
+        self.num_ocr = OneCharRecognizer('dnn/mnist_100.onnx')
 
     def detect_position_markers(self,frame):
         """
-        returns pair of dict D and list L, D[k1][k2] is rect of qrcode for problem k1 at k2, L is list of strings for all qrcodes. 
+        returns dict D such that D[k1] is a list of rect's of qrcode with string k1. 
         """
         value = decode(frame, symbols=[ZBarSymbol.QRCODE])
         position_markers = {}
-        all_strings = []
         if value:
             for qrcode in value:
                 key = qrcode.data.decode('utf-8')
-                all_strings.append(key)
-                k=key
-                position_markers[k]={}
-                position_markers[k]['x']=qrcode.rect
-        all_strings.sort()
-        return (position_markers,all_strings)
+                if key not in position_markers:
+                    position_markers[key]=[]
+                position_markers[key].append(qrcode)
+        return position_markers
     
-    def detect_char(self,box_img):
-        return self.ocr.detect_char(box_img)
+    def detect_char(self,box_img,hint):
+        return self.num_ocr.detect_char(box_img)
 
     def get_preprocessed_box_img(self,box_img):
         neiborhood = numpy.array([[0, 1, 0],[1, 1, 1],[0, 1, 0]],numpy.uint8)
@@ -118,10 +115,10 @@ class OSRbase:
             if k1 == None:
                 continue
             if k1 in position_markers:
-                w=position_markers[k1]["x"].width
-                h=position_markers[k1]["x"].height
-                left=w+position_markers[k1]["x"].left
-                top=position_markers[k1]["x"].top
+                w=position_markers[k1][0].rect.width
+                h=position_markers[k1][0].rect.height
+                left=w+position_markers[k1][0].rect.left
+                top=position_markers[k1][0].rect.top
                 bottom=h+top
                 width = max(w,h)
             else:
@@ -130,19 +127,19 @@ class OSRbase:
                 bottom=None
                 width = None
             if k2 in position_markers:
-                right=position_markers[k2]["x"].left
-                y1=position_markers[k2]["x"].top
+                right=position_markers[k2][0].rect.left
+                y1=position_markers[k2][0].rect.top
                 if top == None:
                     top = y1
                 if top > y1:
                     top = y1
-                h=position_markers[k2]["x"].height
+                h=position_markers[k2][0].rect.height
                 y1 = y1 + h
                 if bottom == None:
                     bottom = y1
                 if bottom < y1:
                     bottom = y1
-                w=position_markers[k2]["x"].width
+                w=position_markers[k2][0].rect.width
                 w = max(w,h)
                 if width == None:
                     width = w
@@ -151,7 +148,8 @@ class OSRbase:
 
             else:
                 right=-1
-            ans.append((top,bottom,left,right,width))
+            format_name = self.get_format_name((k1,k2))
+            ans.append((top,bottom,left,right,width,format_name))
         ans.sort()
         return ans
 
@@ -168,7 +166,29 @@ class OSRbase:
         img_dilate = cv2.dilate(img_erode,neiborhood,iterations=2)
         return img_dilate
 
+    def get_format_name(self,key):
+        ans = {}
+        if key == ('1','2'):
+            return "f1"
+        if key == ('3','4'):
+            return "f2"
+        return ans
 
+    def get_persing_hint_from_format_name(self,name):
+        ans = None
+        if name == "f1":
+            ans = [("s",8,"sid")]
+        if name == "f2":
+            ans = [("s",6,"qid"),("n",1,"data"),("n",3,"data")]
+        return ans
+    def get_detection_hint_from_format_name(self, name):
+        ans = None
+        if name == "f1":
+            ans = ["n" for i in range(8)]
+        if name == "f2":
+            ans = ["n" for i in range(10)]
+        return ans
+        
     def get_key_in_the_same_line(self,key):
         key_in_the_same_line = [('1','2'),('3','4')]
         for p in key_in_the_same_line:
@@ -183,11 +203,21 @@ class OSRbase:
         INPUT:
         frame - image
         """
-        value = decode(frame, symbols=[ZBarSymbol.QRCODE])
-        if value:
-            data={}
-            for qrcode in value:
-                key = qrcode.data.decode('utf-8')
+        position_markers = self.detect_position_markers(frame)
+        west_x = 0
+        west_y = 0
+        east_x = 0
+        east_y = 0
+        for k in position_markers.keys():
+            (k1,k2) = self.get_key_in_the_same_line(k)
+            if k1 not in position_markers:
+                continue
+            if k2 not in position_markers:
+                continue
+            if len(position_markers[k1])!=len(position_markers[k2]):
+                continue
+            
+            for qrcode in position_markers[k1]:
                 x_av=0
                 y_av=0
                 for (x,y) in qrcode.polygon:
@@ -195,27 +225,99 @@ class OSRbase:
                     y_av=y_av+y
                 x_av = x_av / len(qrcode.polygon)
                 y_av = y_av / len(qrcode.polygon)
-                #x, y, w, h = qrcode.rect
-                data[key]=((x_av,y_av),qrcode.polygon)
-            west_x = 0
-            west_y = 0
-            east_x = 0
-            east_y = 0
-            for key in data.keys():
-                (k1,k2) = self.get_key_in_the_same_line(key)
-                if k1 in data and k2 in data:
-                    west_x = data[k1][0][0]
-                    west_y = data[k1][0][1]
-                    east_x = data[k2][0][0]
-                    east_y = data[k2][0][1]
+            west_x = west_x+x_av
+            west_y = west_y+y_av
+
+            for qrcode in position_markers[k2]:
+                x_av=0
+                y_av=0
+                for (x,y) in qrcode.polygon:
+                    x_av=x_av+x
+                    y_av=y_av+y
+                x_av = x_av / len(qrcode.polygon)
+                y_av = y_av / len(qrcode.polygon)
+
+            east_x = east_x+x_av
+            east_y = east_y+y_av
+            
             if east_y-west_y == 0 and east_x-east_y == 0:
                 return None
             ans= math.degrees(math.atan2(east_y-west_y,east_x-east_y))
-            print(ans)
             return ans
         else:
             return None
 
+    def normalize_angle(self,img):
+        rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
+        needs_rotate_90 = False
+        self.reset_detected_data()
+        (img,rotation_mat,needs_rotate_90)=self.modify_angle(img,rotation_mat,needs_rotate_90)
+        return img
+
+    def detect_tokens_in_a_line(self,line_img,width,format):
+        if format == None:
+            format = []
+        tseg = self.get_box_coordinates_h(line_img,width)
+        format = format+[ None for i in tseg]
+        detected_tokens = []
+        box_coord = []
+        for ((left,right),hint) in zip(tseg,format):
+            box_img=line_img[:,left:right]
+            (left_l,right_l,top_l,bottom_l)=self.get_inside_box_coordinates(box_img)
+            box_img = box_img[top_l:bottom_l,left_l:right_l]
+            box_coord.append((left+left_l,top_l,right_l-left_l,bottom_l-top_l))
+
+            preprocessed = self.get_preprocessed_box_img(box_img)
+            num=self.detect_char(preprocessed,hint)
+            detected_tokens.append(num)
+        return(detected_tokens,box_coord)
+
+    def perse_tokens_in_a_line(self,detected_tokens,format):
+        detected_data = []
+        if format != None:
+            i = 0
+            for (datatype,datalen,key) in format:
+                if i+datalen > len(detected_tokens):
+                    break
+                if datatype == "s":
+                    d=""
+                    for di in detected_tokens[i:i+datalen]:
+                        d=d+str(di)
+                elif datatype == "n":
+                    d=0
+                    for di in detected_tokens[i:i+datalen]:
+                        d=d*10+int(di)
+                i=i+datalen
+                detected_data.append((key,d))
+        return detected_data
+
+    def detect_data_in_a_line(self,line_img,width,format_name):
+        format = self.get_detection_hint_from_format_name(format_name)
+        (detected_tokens,box_coord)=self.detect_tokens_in_a_line(line_img,width,format)
+        format = self.get_persing_hint_from_format_name(format_name)
+        detected_data = self.perse_tokens_in_a_line(detected_tokens,format)
+        return (detected_data,detected_tokens,box_coord)
+    
+    def detect_data_in_a_page(self,img):
+        img_c = self.normalize_angle(img)
+        img = cv2.cvtColor(img_c, cv2.COLOR_BGR2GRAY)
+        img = self.reduct_noise(img)
+        position_markers=self.detect_position_markers(img)
+        lines=self.get_line_coordinates(position_markers)
+        box_coord = []
+        detected_data = []
+        for (ltop,lbottom,lleft,lright,width,ditection_hint) in lines:
+            line_img = img[ltop:lbottom,lleft:lright]
+            (data,detected_tokens,bc)=self.detect_data_in_a_line(line_img,width,ditection_hint)
+            detected_data.append(data)
+            box_coord=box_coord+[ (l+lleft,t+ltop,w,h) for (l,t,w,h) in bc]
+        
+        img_info = {}
+        img_info["box_coordinates"]=box_coord
+        img_info["position_markers"]=position_markers
+        img_info["normalized_img"]=img_c
+        img_info["line_info"]=lines
+        return (detected_data,img_info)
 
 class InteractiveOSR(OSRbase):
     def __init__(self):
@@ -272,13 +374,6 @@ class InteractiveOSR(OSRbase):
         self.detected_data = {}
         self.marking_boxes = {}
 
-    def draw_markers(self,frame,position_markers):
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        for k in position_markers.keys():
-            (x,y,w,h) = position_markers[k]
-            frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),1)
-            frame=cv2.putText(frame,k,(x,y-6),font,.3,(255,0,0),1,cv2.LINE_AA)
-        return frame
 
 
 class OSR4Png(InteractiveOSR):
@@ -287,68 +382,32 @@ class OSR4Png(InteractiveOSR):
         image = Image.open(filename)
         self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR)]
 
-    def normalize_angle(self,img):
-        rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
-        needs_rotate_90 = False
-        self.reset_detected_data()
-        (img,rotation_mat,needs_rotate_90)=self.modify_angle(img,rotation_mat,needs_rotate_90)
-        return img
-
-    def detect_a_line(self,line_img,width):
-        tseg = self.get_box_coordinates_h(line_img,width)
-        detected_tokens = []
-        box_coord = []
-        for (left,right) in tseg:
-            box_img=line_img[:,left:right]
-            (left_l,right_l,top_l,bottom_l)=self.get_inside_box_coordinates(box_img)
-            box_img = box_img[top_l:bottom_l,left_l:right_l]
-            box_coord.append(((left+left_l,top_l,right_l-left_l,bottom_l-top_l),box_img))
-
-            preprocessed = self.get_preprocessed_box_img(box_img)
-            num=self.detect_char(preprocessed)
-            detected_tokens.append(num)
-            #cv2.imshow('box_img', box_img)
-            #cv2.imshow('box_img_x', preprocessed)
-            #keyinput= cv2.waitKey(0)
-            #if keyinput & 0xFF == ord('q'):
-            #    return
-        return(detected_tokens,box_coord)
-
-    def detect_a_page(self,img):
-        img_c = self.normalize_angle(img)
-        img = cv2.cvtColor(img_c, cv2.COLOR_BGR2GRAY)
-        img = self.reduct_noise(img)
-        (position_markers,strings)=self.detect_position_markers(img)
-        lines=self.get_line_coordinates(position_markers)
-        box_coord = []
-        detected_data = []
-        for (ltop,lbottom,lleft,lright,width) in lines:
-            line_img = img[ltop:lbottom,lleft:lright]
-            (detected_tokens,bc)=self.detect_a_line(line_img,width)
-            detected_data.append(detected_tokens)
-            box_coord=box_coord+[ ((l+lleft,t+ltop,w,h),boximg) for ((l,t,w,h),boximg) in bc]
-        return (detected_data,box_coord,position_markers,img_c)
     
     def detect_with_gui(self):
         font = cv2.FONT_HERSHEY_SIMPLEX
         for pagenum,frame in enumerate(self.scannedimages):
-            (detected_data,box_coord,position_markers,img)=self.detect_a_page(frame)
+            (detected_data,img_info)=self.detect_data_in_a_page(frame)
+            box_coord=img_info["box_coordinates"]
+            position_markers=img_info["position_markers"]
+            img=img_info["normalized_img"]
+            lines_coord=img_info["line_info"]
+            
             print(detected_data)
             frame_modified = img
-            #frame_modified = img_gray
             while True:
                 frame = frame_modified.copy()
                 s="Page: {:d}".format(pagenum+1)
                 frame=cv2.putText(frame,s,(0,30),font,1.0,(255,255,255),4,cv2.LINE_AA)
                 frame=cv2.putText(frame,s,(0,30),font,1.0,(64,128,64),2,cv2.LINE_AA)
 
-                for qid in position_markers.keys():
-                    hmarkers={}
-                    vmarkers={}
-                    frame = self.draw_markers(frame,position_markers[qid])
-                    pass
-                for ((x,y,w,h),img) in box_coord:
-                    frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,0,255),1)
+                for k in position_markers.keys():
+                    for qrcode in position_markers[k]:
+                        (x,y,w,h)=qrcode.rect
+                        frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),3)
+                for (top,bottom,left,right,width,ditection_hint) in lines_coord:
+                    frame=cv2.rectangle(frame,(left,top),(right,bottom),(155,155,0),1)
+                for (x,y,w,h) in box_coord:
+                    frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,0,255),2)
 
                 cv2.imshow('toyomr scan image', frame)
                 # quit
