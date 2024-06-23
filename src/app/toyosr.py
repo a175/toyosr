@@ -5,7 +5,11 @@ import math
 from pyzbar.pyzbar import decode, ZBarSymbol
 import numpy
 import pdf2image
-
+import pypdf
+import tempfile
+import io
+import zipfile
+import os
 
 class OneCharRecognizer:
     def __init__(self,model_file):
@@ -23,10 +27,108 @@ class OneCharRecognizer:
         ind = numpy.argsort(pred)
         return int(ind[-1])
 
+class FilepathManager:
+    def __init__(self,root):
+        self.root = root
+        self.dir_to_check = os.path.join(self.root,"to_check")
+        self.pngdir_to_check = os.path.join(self.dir_to_check,"png")
+        self.pdfdir_to_distribute = os.path.join(self.root,"pdf_to_distribute")
+        self.pdfdir_not_to_distribute = os.path.join(self.root,"pdf_with_bad_id")
+        self.pdfdir_with_sid = os.path.join(self.root,"pdf_without_id")
 
+
+        self.dict_from_sid_to_dir = {"123456789":"__"}
+        
+    def get_line_png_to_check(self,page,line):
+        d = os.path.join(self.pngdir_to_check,str(page))
+        ans = os.path.join(d,str(line)+".png")
+        return ans
+
+    def is_leagal_sid(self,sid):
+        if sid in self.dict_from_sid_to_dir:
+            True
+        return False
+
+    def get_pdf_to_distribute(self,sid,page_num):
+        filename = str(page_num)+".pdf"
+
+        if sid == None:
+            ans = self.pdfdir_with_sid
+            ans = os.path.join(ans,filename)
+            return ans
+            
+        if self.is_leagal_sid(sid):
+            ans = self.pdfdir_to_distribute 
+            ans = os.path.join(ans,self.dict_from_sid_to_dir[sid])
+            ans = os.path.join(ans,filename)
+            return ans
+        ans = self.pdfdir_not_to_distribute 
+        ans = os.path.join(ans,str(sid)+"_"+str(page_num))
+        ans = os.path.join(ans,filename)
+        return ans
+            
+        
+class DetectionHint:
+    def get_format_name(self,key):
+        ans = {}
+        if key == ('1','2'):
+            return "f1"
+        if key == ('3','4'):
+            return "f2"
+        return ans
+
+    def get_persing_hint_from_format_name(self,name):
+        ans = None
+        if name == "f1":
+            ans = [("s",8,"sid")]
+        if name == "f2":
+            ans = [("s",6,"qid"),("n",1,"data"),("n",3,"data")]
+        return ans
+
+    def get_detection_hint_from_format_name(self, name):
+        ans = None
+        if name == "f1":
+            ans = ["n" for i in range(8)]
+        if name == "f2":
+            ans = ["n" for i in range(10)]
+        return ans
+        
+    def get_key_in_the_same_line(self,key):
+        key_in_the_same_line = [('1','2'),('3','4')]
+        for p in key_in_the_same_line:
+            if key in p:
+                return p
+        return (None,None)
+
+    def get_sid_from_detected_data_in_a_page(self, page_data):
+        for li in page_data:
+            for (datatype,data) in li:
+                if datatype == "sid":
+                    return data
+        return None
+                
+    def get_qid_from_detected_data_in_a_page(self, page_data):
+        for li in page_data:
+            for (datatype,data) in li:
+                if datatype == "qid":
+                    return data
+        return None
+                
+    def get_serialized_data_from_detected_data_in_a_page(self, page_data):
+        ans = []
+        for li in page_data:
+            for (datatype,data) in li:
+                if datatype == "sid":
+                    continue
+                if datatype == "qid":
+                    continue
+                ans.append((datatype,data))
+        return ans
+                
 class OSRbase:
     def __init__(self):
         self.num_ocr = OneCharRecognizer('dnn/mnist_100.onnx')
+        self.detection_hint = DetectionHint()
 
     def detect_position_markers(self,frame):
         """
@@ -101,7 +203,6 @@ class OSRbase:
         if left != None:
             seg.append((left,right))
         ans = [s for s in seg if 1.2*width > s[1]-s[0] > 0.8*width]
-        print(len(ans),len(seg))
         return ans
 
     def get_line_coordinates(self,position_markers):
@@ -110,7 +211,7 @@ class OSRbase:
         for k in position_markers.keys():
             if k in done:
                 continue
-            (k1,k2)=self.get_key_in_the_same_line(k)
+            (k1,k2)=self.detection_hint.get_key_in_the_same_line(k)
             done.append(k1)
             done.append(k2)
             if k1 == None:
@@ -149,7 +250,7 @@ class OSRbase:
 
             else:
                 right=-1
-            format_name = self.get_format_name((k1,k2))
+            format_name = self.detection_hint.get_format_name((k1,k2))
             ans.append((top,bottom,left,right,width,format_name))
         ans.sort()
         return ans
@@ -167,35 +268,6 @@ class OSRbase:
         img_dilate = cv2.dilate(img_erode,neiborhood,iterations=2)
         return img_dilate
 
-    def get_format_name(self,key):
-        ans = {}
-        if key == ('1','2'):
-            return "f1"
-        if key == ('3','4'):
-            return "f2"
-        return ans
-
-    def get_persing_hint_from_format_name(self,name):
-        ans = None
-        if name == "f1":
-            ans = [("s",8,"sid")]
-        if name == "f2":
-            ans = [("s",6,"qid"),("n",1,"data"),("n",3,"data")]
-        return ans
-    def get_detection_hint_from_format_name(self, name):
-        ans = None
-        if name == "f1":
-            ans = ["n" for i in range(8)]
-        if name == "f2":
-            ans = ["n" for i in range(10)]
-        return ans
-        
-    def get_key_in_the_same_line(self,key):
-        key_in_the_same_line = [('1','2'),('3','4')]
-        for p in key_in_the_same_line:
-            if key in p:
-                return p
-        return (None,None)
 
     def detect_angle(self,frame):
         """
@@ -210,7 +282,7 @@ class OSRbase:
         east_x = 0
         east_y = 0
         for k in position_markers.keys():
-            (k1,k2) = self.get_key_in_the_same_line(k)
+            (k1,k2) = self.detection_hint.get_key_in_the_same_line(k)
             if k1 not in position_markers:
                 continue
             if k2 not in position_markers:
@@ -247,6 +319,26 @@ class OSRbase:
             return ans
         else:
             return None
+
+    def modify_angle(self,frame,default_rotation_mat,default_rotaion_90):
+        img_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        degrees=self.detect_angle(img_gray)
+        if degrees != None:
+            if (45 < degrees % 180 and degrees % 180  < 135) :
+                needs_rotate_90=True
+                degrees=degrees+90
+                (w,h)=img_gray.shape
+            else:
+                needs_rotate_90=False
+                (h,w)=img_gray.shape
+            rotation_mat = cv2.getRotationMatrix2D((w/2,h/2), degrees, 1)
+        else:
+            rotation_mat = default_rotation_mat
+            needs_rotate_90 = default_rotaion_90
+        if needs_rotate_90:                
+            frame=cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        (h,w,c)=frame.shape
+        return (cv2.warpAffine(frame,rotation_mat,(w,h),borderValue=(255,255,255)),rotation_mat,needs_rotate_90)
 
     def normalize_angle(self,img):
         rotation_mat = cv2.getRotationMatrix2D((0,0),0, 1)
@@ -292,9 +384,9 @@ class OSRbase:
         return detected_data
 
     def detect_data_in_a_line(self,line_img,width,format_name):
-        format = self.get_detection_hint_from_format_name(format_name)
+        format = self.detection_hint.get_detection_hint_from_format_name(format_name)
         (detected_tokens,box_coord)=self.detect_tokens_in_a_line(line_img,width,format)
-        format = self.get_persing_hint_from_format_name(format_name)
+        format = self.detection_hint.get_persing_hint_from_format_name(format_name)
         detected_data = self.perse_tokens_in_a_line(detected_tokens,format)
         return (detected_data,detected_tokens,box_coord)
     
@@ -326,69 +418,140 @@ class InteractiveOSR(OSRbase):
     def detect_with_gui(self):
         pass
 
-    def get_detected_answers_for_questions_as_csv_lines(self):
-        ans = []
-        (answers,strings) = self.get_detected_answers_for_questions()
-        s=",".join([si for si in strings if not si.startswith("marker:")])
-        for questionid in answers.keys():
-            m=",".join(["&".join(qi) for qi in answers[questionid]])
-            d=questionid+','+m+','+s
-            ans.append(d)
-        return ans
-
-    def get_detected_answers_for_questions(self):
-        strings = self.detected_strings[:]
-        strings.sort()
-        ans = {}
-        for questionid in self.questions.keys():
-            if questionid not in self.detected_data:
-                continue
-            marked_keys=self.detected_data[questionid]
-            ans[questionid]=[[a for (k,a) in qi if k in marked_keys] for qi in self.questions[questionid]]
-        return(ans,strings)
-
-    def modify_angle(self,frame,default_rotation_mat,default_rotaion_90):
-        img_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        degrees=self.detect_angle(img_gray)
-        if degrees != None:
-            if (45 < degrees % 180 and degrees % 180  < 135) :
-                needs_rotate_90=True
-                degrees=degrees+90
-                (w,h)=img_gray.shape
-            else:
-                needs_rotate_90=False
-                (h,w)=img_gray.shape
-            rotation_mat = cv2.getRotationMatrix2D((w/2,h/2), degrees, 1)
-        else:
-            rotation_mat = default_rotation_mat
-            needs_rotate_90 = default_rotaion_90
-        if needs_rotate_90:                
-            frame=cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        (h,w,c)=frame.shape
-        return (cv2.warpAffine(frame,rotation_mat,(w,h),borderValue=(255,255,255)),rotation_mat,needs_rotate_90)
-    
-
 
 
 class OSR4Pdf(InteractiveOSR):
     def __init__(self,filename):
         super().__init__()
-        pdfimages = pdf2image.convert_from_path(filename,dpi=600)
-        self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR) for image in pdfimages]
 
-    
+        self.original_pdffile = pypdf.PdfReader(filename)
+
+
+            #pdfimages = pdf2image.convert_from_path(filename,dpi=600)
+
+        #self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR) for image in pdfimages]
+
+    def get_scannedimage_from_pdfpage(self,pdfpage):
+        pdfwriter = pypdf.PdfWriter()
+        pdfwriter.add_page(pdfpage)
+        t = io.BytesIO()
+        pdfwriter.write(t)
+        t.flush()
+        pdfimages = pdf2image.convert_from_bytes(t.getvalue(),dpi=600)
+        img = cv2.cvtColor(numpy.asarray(pdfimages[0]),cv2.COLOR_RGB2BGR)
+        return img
+
+    def save_partial_image_as_png(self,pngfile,img,top,bottom,left,right):
+        mag = 5
+        lineimg = img[top:bottom,left:right]
+        h=(bottom-top)//mag
+        w=(right-left)//mag
+        lineimg = cv2.resize(lineimg,(w,h))
+        (flag,buffer)=cv2.imencode(".png",lineimg)
+        if flag:
+            pngfile.write(buffer)
+
+    def save_png_images_of_line(self,logzip,filepathmanager,pagenum,img_info):
+        img=img_info["normalized_img"]
+        lines_coord=img_info["line_info"]        
+        for (linenum,lineinfo) in enumerate(lines_coord):
+            (top,bottom,left,right,width,ditection_hint)=lineinfo
+            fn=filepathmanager.get_line_png_to_check(pagenum,linenum)
+            print(fn)
+            with logzip.open(fn,"w") as pngfile:
+                self.save_partial_image_as_png(pngfile,img,top,bottom,left,right)
+    def save_pdf_to_distribute(self,logzip,pdfpage,filepathmanager,pagenum,sid):
+        fn=filepathmanager.get_pdf_to_distribute(sid,pagenum)
+        pdfwriter = pypdf.PdfWriter()
+        pdfwriter.add_page(pdfpage)
+        t = io.BytesIO()
+        pdfwriter.write(t)
+        t.flush()
+        with logzip.open(fn,"w") as f:
+            print(fn)
+            f.write(t.getvalue())
+    def get_table_data(self,detected_data):
+        all_qid = []
+        for di in detected_data:
+            qid = self.detection_hint.get_qid_from_detected_data_in_a_page(di)
+            if qid not in all_qid:
+                all_qid.append(qid)
+        all_qid.sort()
+        all_sid = []
+        for di in detected_data:
+            sid = self.detection_hint.get_sid_from_detected_data_in_a_page(di)
+            if sid == None:
+                continue
+            if sid not in all_sid:
+                all_sid.append(sid)
+        all_sid.sort()
+
+        data_with_sid={}
+        for sid in all_sid:
+            data_with_sid[sid]={}
+            for qid in all_qid:
+                data_with_sid[sid][qid]=[]
+        for di in detected_data:
+            sid = self.detection_hint.get_sid_from_detected_data_in_a_page(di)
+            qid = self.detection_hint.get_qid_from_detected_data_in_a_page(di)
+            sdata = self.detection_hint.get_serialized_data_from_detected_data_in_a_page(di)
+            if sid == None:
+                continue
+            data_with_sid[sid][qid].append(sdata)
+        max_num_of_qid={}
+        for qid in all_qid:
+            max_num_of_qid[qid]= max(len(data_with_sid[sid][qid]) for sid in all_sid)
+
+        max_len_of_qid={}
+        for qid in all_qid:
+            max_len_of_qid[qid]= max(len(di) for sid in all_sid for di in data_with_sid[sid][qid])
+
+        ans = []
+        for sid in all_sid:
+            line = [sid]
+            data = data_with_sid[sid]
+            for qid in all_qid:
+                for di in data[qid]:
+                    for dij in di:
+                        line.append(dij)
+                    for i in range(max_len_of_qid[qid]-len(di)):
+                        line.append(None)
+                for j in range(max_num_of_qid[qid]-len(data[qid])):
+                    for i in range(max_len_of_qid[qid]):
+                        line.append(None)
+            ans.append(line)
+        top_line = ["id"] 
+        for qid in all_qid:
+            for j in range(max_num_of_qid[qid]):
+                top_line.append(qid)
+                for i in range(max_len_of_qid[qid]-1):
+                    top_line.append(None)
+       
+        print(ans,top_line)
+        return (ans,top_line)
+        
     def detect_with_gui(self):
         font = cv2.FONT_HERSHEY_SIMPLEX
-        for pagenum,frame in enumerate(self.scannedimages):
-            (detected_data,img_info)=self.detect_data_in_a_page(frame)
-            box_coord=img_info["box_coordinates"]
-            position_markers=img_info["position_markers"]
-            img=img_info["normalized_img"]
-            lines_coord=img_info["line_info"]
-            
-            print(detected_data)
-            frame_modified = img
+        filename = "/tmp/x.zip"
+        filepathmanager = FilepathManager("x")
+        rawdata = []
+        with zipfile.ZipFile(filename,'w') as myzip:            
+            for pagenum,pdfpage in enumerate(self.original_pdffile.pages):
+                img = self.get_scannedimage_from_pdfpage(pdfpage)
+                (detected_data,img_info)=self.detect_data_in_a_page(img)
+                rawdata.append(detected_data)
+                self.save_png_images_of_line(myzip,filepathmanager,pagenum,img_info)
+                sid=self.detection_hint.get_sid_from_detected_data_in_a_page(detected_data)
+                self.save_pdf_to_distribute(myzip,pdfpage,filepathmanager,pagenum,sid)
+                print(detected_data)
+            (tablebody,table_header)=self.get_table_data(rawdata)
+            frame_modified = img_info["normalized_img"]
+
+                
             while True:
+                position_markers=img_info["position_markers"]
+                lines_coord=img_info["line_info"]        
+                box_coord=img_info["box_coordinates"]
                 frame = frame_modified.copy()
                 s="Page: {:d}".format(pagenum+1)
                 frame=cv2.putText(frame,s,(0,30),font,1.0,(255,255,255),4,cv2.LINE_AA)
@@ -417,8 +580,6 @@ class OSR4Pdf(InteractiveOSR):
                     return
                 elif keyinput & 0xFF == 13:
                     #enter
-                    for li in self.get_detected_answers_for_questions_as_csv_lines():
-                        print(li)
                     break
 
     

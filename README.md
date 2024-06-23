@@ -8,6 +8,7 @@ Mock-up of simple optical scoresheet reader / optical character recognizer (ocr)
 `opencv`関係のパッケージがいる.
 `pdf2image`,
 `pyzbar`
+`pypdf`
 がいる.
 
 ### pip について.
