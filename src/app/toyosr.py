@@ -127,7 +127,7 @@ class DetectionHint:
                 
 class OSRbase:
     def __init__(self):
-        self.num_ocr = OneCharRecognizer('dnn/mnist_100.onnx')
+        self.num_ocr = OneCharRecognizer('dnn/model_num_mnist_256x100.onnx')
         self.detection_hint = DetectionHint()
 
     def detect_position_markers(self,frame):
@@ -495,6 +495,8 @@ class OSR4Pdf(InteractiveOSR):
             sid = self.detection_hint.get_sid_from_detected_data_in_a_page(di)
             qid = self.detection_hint.get_qid_from_detected_data_in_a_page(di)
             sdata = self.detection_hint.get_serialized_data_from_detected_data_in_a_page(di)
+            if sdata == []:
+                continue
             if sid == None:
                 continue
             data_with_sid[sid][qid].append(sdata)
