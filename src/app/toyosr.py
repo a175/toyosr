@@ -6,7 +6,6 @@ from pyzbar.pyzbar import decode, ZBarSymbol
 import numpy
 import pdf2image
 import pypdf
-import tempfile
 import io
 import zipfile
 import os
@@ -605,7 +604,9 @@ class OSR4Pdf(OSRbase):
             if logzip == None:
                 continue
             self.save_images_of_line(logzip,filepathmanager,pagenum,img_info)
-            sid=self.detection_hint.get_sid_from_detected_data_in_a_page(detected_data)
+
+        for (pagenum,(pdfpage,data)) in enumerate(zip(original_pdffile.pages,rawdata)):
+            sid=self.detection_hint.get_sid_from_detected_data_in_a_page(data)
             self.save_image_to_distribute(logzip,pdfpage,filepathmanager,pagenum,sid)
         return rawdata
         
