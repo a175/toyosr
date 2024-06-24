@@ -28,46 +28,73 @@ class OneCharRecognizer:
         return int(ind[-1])
 
 class FilepathManager:
-    def __init__(self,root):
-        self.root = root
-        self.dir_to_check = os.path.join(self.root,"to_check")
-        self.pngdir_to_check = os.path.join(self.dir_to_check,"png")
-        self.pdfdir_to_distribute = os.path.join(self.root,"pdf_to_distribute")
-        self.pdfdir_not_to_distribute = os.path.join(self.root,"pdf_with_bad_id")
-        self.pdfdir_with_sid = os.path.join(self.root,"pdf_without_id")
-
-
-        self.dict_from_sid_to_dir = {"123456789":"__"}
-        
+    def __init__(self,basezipname):
+        self.zipfilepath = basezipname
+        self.dict_from_sid_to_dir = {"12345678":"__"}
+    def get_zipfilepath(self):
+        return self.zipfilepath
+    def get_root(self):
+        ans = os.path.basename(self.get_zipfilepath())
+        ans, ext = os.path.splitext(ans)
+        return ans
+    def get_dir_to_check(self):
+        return os.path.join(self.get_root(),"to_check")
+    def get_pdfdir_not_to_distribute(self):
+        return os.path.join(self.get_root(),"pdf_with_bad_id")
+    def get_pdfdir_with_sid(self):
+        return os.path.join(self.get_root(),"pdf_without_id")    
+    def get_pngdir_to_check(self):
+        return  os.path.join(self.get_dir_to_check(),"png")
+    def get_pdfdir_to_distribute(self):
+        return os.path.join(self.get_root(),"pdf_to_distribute")
     def get_line_png_to_check(self,page,line):
-        d = os.path.join(self.pngdir_to_check,str(page))
+        d = os.path.join(self.get_pngdir_to_check(),str(page))
         ans = os.path.join(d,str(line)+".png")
         return ans
-
+    
     def is_leagal_sid(self,sid):
         if sid in self.dict_from_sid_to_dir:
-            True
+            return True
         return False
 
-    def get_pdf_to_distribute(self,sid,page_num):
-        filename = str(page_num)+".pdf"
-
+    def get_dirname_to_distribute(self,sid,pagenum):
         if sid == None:
-            ans = self.pdfdir_with_sid
-            ans = os.path.join(ans,filename)
+            ans = self.get_pdfdir_with_sid()
             return ans
-            
         if self.is_leagal_sid(sid):
-            ans = self.pdfdir_to_distribute 
+            ans = self.get_pdfdir_to_distribute() 
             ans = os.path.join(ans,self.dict_from_sid_to_dir[sid])
-            ans = os.path.join(ans,filename)
             return ans
-        ans = self.pdfdir_not_to_distribute 
-        ans = os.path.join(ans,str(sid)+"_"+str(page_num))
+        ans = self.get_pdfdir_not_to_distribute()
+        ans = os.path.join(ans,str(sid)+"_"+str(pagenum))
+        return ans
+        
+    def get_pdf_to_distribute(self,sid,pagenum):
+        filename = str(pagenum)+".pdf"
+        ans = self.get_dirname_to_distribute(sid,pagenum)
         ans = os.path.join(ans,filename)
         return ans
-            
-        
+
+    def get_csv_to_distribute(self,sid):
+        if sid == None:
+            return None
+        if not self.is_leagal_sid(sid):
+            return None
+        filename = "a.csv"
+        ans = self.get_dirname_to_distribute(sid,0)
+        ans = os.path.join(ans,filename)
+        return ans
+    def get_csv_for_leagal(self):
+        filename = "data.csv"
+        ans = self.get_root()
+        ans = os.path.join(ans,filename)
+        return ans
+    def get_csv_for_bad(self):
+        filename = "data_with_bad_sid.csv"
+        ans = self.get_root()
+        ans = os.path.join(ans,filename)
+        return ans
+
 class DetectionHint:
     def get_format_name(self,key):
         ans = {}
@@ -126,9 +153,9 @@ class DetectionHint:
         return ans
                 
 class OSRbase:
-    def __init__(self):
+    def __init__(self,detection_hint):
         self.num_ocr = OneCharRecognizer('dnn/model_num_mnist_256x100.onnx')
-        self.detection_hint = DetectionHint()
+        self.detection_hint = detection_hint
 
     def detect_position_markers(self,frame):
         """
@@ -398,9 +425,9 @@ class OSRbase:
         lines=self.get_line_coordinates(position_markers)
         box_coord = []
         detected_data = []
-        for (ltop,lbottom,lleft,lright,width,ditection_hint) in lines:
+        for (ltop,lbottom,lleft,lright,width,d_hint) in lines:
             line_img = img[ltop:lbottom,lleft:lright]
-            (data,detected_tokens,bc)=self.detect_data_in_a_line(line_img,width,ditection_hint)
+            (data,detected_tokens,bc)=self.detect_data_in_a_line(line_img,width,d_hint)
             detected_data.append(data)
             box_coord=box_coord+[ (l+lleft,t+ltop,w,h) for (l,t,w,h) in bc]
         
@@ -411,65 +438,6 @@ class OSRbase:
         img_info["line_info"]=lines
         return (detected_data,img_info)
 
-class InteractiveOSR(OSRbase):
-    def __init__(self):
-        super().__init__()
-    
-    def detect_with_gui(self):
-        pass
-
-
-
-class OSR4Pdf(InteractiveOSR):
-    def __init__(self,filename):
-        super().__init__()
-
-        self.original_pdffile = pypdf.PdfReader(filename)
-
-
-            #pdfimages = pdf2image.convert_from_path(filename,dpi=600)
-
-        #self.scannedimages =  [ cv2.cvtColor(numpy.asarray(image),cv2.COLOR_RGB2BGR) for image in pdfimages]
-
-    def get_scannedimage_from_pdfpage(self,pdfpage):
-        pdfwriter = pypdf.PdfWriter()
-        pdfwriter.add_page(pdfpage)
-        t = io.BytesIO()
-        pdfwriter.write(t)
-        t.flush()
-        pdfimages = pdf2image.convert_from_bytes(t.getvalue(),dpi=600)
-        img = cv2.cvtColor(numpy.asarray(pdfimages[0]),cv2.COLOR_RGB2BGR)
-        return img
-
-    def save_partial_image_as_png(self,pngfile,img,top,bottom,left,right):
-        mag = 5
-        lineimg = img[top:bottom,left:right]
-        h=(bottom-top)//mag
-        w=(right-left)//mag
-        lineimg = cv2.resize(lineimg,(w,h))
-        (flag,buffer)=cv2.imencode(".png",lineimg)
-        if flag:
-            pngfile.write(buffer)
-
-    def save_png_images_of_line(self,logzip,filepathmanager,pagenum,img_info):
-        img=img_info["normalized_img"]
-        lines_coord=img_info["line_info"]        
-        for (linenum,lineinfo) in enumerate(lines_coord):
-            (top,bottom,left,right,width,ditection_hint)=lineinfo
-            fn=filepathmanager.get_line_png_to_check(pagenum,linenum)
-            print(fn)
-            with logzip.open(fn,"w") as pngfile:
-                self.save_partial_image_as_png(pngfile,img,top,bottom,left,right)
-    def save_pdf_to_distribute(self,logzip,pdfpage,filepathmanager,pagenum,sid):
-        fn=filepathmanager.get_pdf_to_distribute(sid,pagenum)
-        pdfwriter = pypdf.PdfWriter()
-        pdfwriter.add_page(pdfpage)
-        t = io.BytesIO()
-        pdfwriter.write(t)
-        t.flush()
-        with logzip.open(fn,"w") as f:
-            print(fn)
-            f.write(t.getvalue())
     def get_table_data(self,detected_data):
         all_qid = []
         for di in detected_data:
@@ -531,58 +499,121 @@ class OSR4Pdf(InteractiveOSR):
        
         print(ans,top_line)
         return (ans,top_line)
+
+    def get_csv_line_str(self,data):
+        ans = ",".join( str(hi) if hi != None else "" for hi in data )
+        return ans+"\n"
+
+    def get_csv_line_str_from_detected_data(self,data):
+        ans = self.get_csv_line_str([ di[1] for di in data])
+        return ans
+
+    def save_csv_lines_to_distribute(self,logzip,tablebody,header,filepathmanager):
+        header_without_sid = header[1:]
+        headercsv=self.get_csv_line_str(header_without_sid)
+        for di in tablebody:
+            sid = di[0]
+            data=di[1:]
+            csvline=self.get_csv_line_str_from_detected_data(data)
+            fn=filepathmanager.get_csv_to_distribute(sid)
+            if fn == None:
+                continue
+            with logzip.open(fn,"w") as f:
+                print(headercsv)
+                print(csvline)
+                f.write(headercsv.encode())
+                f.write(csvline.encode())
+
+    def save_csv_file(self,logzip,tablebody,header,filepathmanager):
+        headercsv=self.get_csv_line_str(header)
+        fn=filepathmanager.get_csv_for_leagal()
+        with logzip.open(fn,"w") as f:
+            print(headercsv)
+            f.write(headercsv.encode())
+            for di in tablebody:
+                sid = di[0]
+                csvline=self.get_csv_line_str_from_detected_data(di)
+                if not filepathmanager.is_leagal_sid(sid):
+                    continue
+                print(csvline)
+                f.write(csvline.encode())
+
+        fn=filepathmanager.get_csv_for_bad()
+        with logzip.open(fn,"w") as f:
+            print(headercsv)
+            f.write(headercsv.encode())
+            for di in tablebody:
+                sid = di[0]
+                csvline=self.get_csv_line_str_from_detected_data(di)
+                if filepathmanager.is_leagal_sid(sid):
+                    continue
+                print(csvline)
+                f.write(csvline.encode())
+
+
+    def save_partial_image_as_png(self,fileobj,img,top,bottom,left,right):
+        mag = 5
+        lineimg = img[top:bottom,left:right]
+        h=(bottom-top)//mag
+        w=(right-left)//mag
+        lineimg = cv2.resize(lineimg,(w,h))
+        (flag,buffer)=cv2.imencode(".png",lineimg)
+        if flag:
+            fileobj.write(buffer)
+
+    def save_images_of_line(self,logzip,filepathmanager,pagenum,img_info):
+        img=img_info["normalized_img"]
+        lines_coord=img_info["line_info"]        
+        for (linenum,lineinfo) in enumerate(lines_coord):
+            (top,bottom,left,right,width,d_hint)=lineinfo
+            fn=filepathmanager.get_line_png_to_check(pagenum,linenum)
+            print(fn)
+            with logzip.open(fn,"w") as pngfile:
+                self.save_partial_image_as_png(pngfile,img,top,bottom,left,right)
+
+class OSR4Pdf(OSRbase):
+    def __init__(self,detection_hint):
+        super().__init__(detection_hint)
+
+    def get_scannedimage_from_pdfpage(self,pdfpage):
+        pdfwriter = pypdf.PdfWriter()
+        pdfwriter.add_page(pdfpage)
+        t = io.BytesIO()
+        pdfwriter.write(t)
+        t.flush()
+        pdfimages = pdf2image.convert_from_bytes(t.getvalue(),dpi=600)
+        img = cv2.cvtColor(numpy.asarray(pdfimages[0]),cv2.COLOR_RGB2BGR)
+        return img
+
+    def save_image_to_distribute(self,logzip,pdfpage,filepathmanager,pagenum,sid):
+        fn=filepathmanager.get_pdf_to_distribute(sid,pagenum)
+        pdfwriter = pypdf.PdfWriter()
+        pdfwriter.add_page(pdfpage)
+        t = io.BytesIO()
+        pdfwriter.write(t)
+        t.flush()
+        with logzip.open(fn,"w") as f:
+            print(fn)
+            f.write(t.getvalue())
         
-    def detect_with_gui(self):
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        filename = "/tmp/x.zip"
-        filepathmanager = FilepathManager("x")
+    def detect_rawdata_in_all_pages(self,original_pdffile,logzip,filepathmanager):
         rawdata = []
-        with zipfile.ZipFile(filename,'w') as myzip:            
-            for pagenum,pdfpage in enumerate(self.original_pdffile.pages):
-                img = self.get_scannedimage_from_pdfpage(pdfpage)
-                (detected_data,img_info)=self.detect_data_in_a_page(img)
-                rawdata.append(detected_data)
-                self.save_png_images_of_line(myzip,filepathmanager,pagenum,img_info)
-                sid=self.detection_hint.get_sid_from_detected_data_in_a_page(detected_data)
-                self.save_pdf_to_distribute(myzip,pdfpage,filepathmanager,pagenum,sid)
-                print(detected_data)
-            (tablebody,table_header)=self.get_table_data(rawdata)
-            frame_modified = img_info["normalized_img"]
-
-                
-            while True:
-                position_markers=img_info["position_markers"]
-                lines_coord=img_info["line_info"]        
-                box_coord=img_info["box_coordinates"]
-                frame = frame_modified.copy()
-                s="Page: {:d}".format(pagenum+1)
-                frame=cv2.putText(frame,s,(0,30),font,1.0,(255,255,255),4,cv2.LINE_AA)
-                frame=cv2.putText(frame,s,(0,30),font,1.0,(64,128,64),2,cv2.LINE_AA)
-
-                for k in position_markers.keys():
-                    for qrcode in position_markers[k]:
-                        (x,y,w,h)=qrcode.rect
-                        frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),3)
-                for (top,bottom,left,right,width,ditection_hint) in lines_coord:
-                    frame=cv2.rectangle(frame,(left,top),(right,bottom),(155,155,0),1)
-                for (x,y,w,h) in box_coord:
-                    frame=cv2.rectangle(frame,(x,y),(x+w,y+h),(0,0,255),2)
-
-                cv2.imshow('toyomr scan image', frame)
-                # quit
-                keyinput=cv2.waitKey(1)
-                if keyinput & 0xFF == ord('q'):
-                    return
-                elif keyinput & 0xFF == ord('z'):
-                    is_sleeping = not is_sleeping
-                elif keyinput & 0xFF == ord(' '):
-                    break
-                elif keyinput & 0xFF == 27:
-                    #ESC
-                    return
-                elif keyinput & 0xFF == 13:
-                    #enter
-                    break
+        for pagenum,pdfpage in enumerate(original_pdffile.pages):
+            img = self.get_scannedimage_from_pdfpage(pdfpage)
+            (detected_data,img_info)=self.detect_data_in_a_page(img)
+            rawdata.append(detected_data)
+            if logzip == None:
+                continue
+            self.save_images_of_line(logzip,filepathmanager,pagenum,img_info)
+            sid=self.detection_hint.get_sid_from_detected_data_in_a_page(detected_data)
+            self.save_image_to_distribute(logzip,pdfpage,filepathmanager,pagenum,sid)
+        return rawdata
+        
+    def detect_pdf(self,pdffilereader,logzip,filepathmanager):
+        rawdata=self.detect_rawdata_in_all_pages(pdffilereader,logzip,filepathmanager)
+        (tablebody,table_header)=self.get_table_data(rawdata)
+        self.save_csv_lines_to_distribute(logzip,tablebody,table_header,filepathmanager)
+        self.save_csv_file(logzip,tablebody,table_header,filepathmanager)
 
     
 def main_pdf():
@@ -590,9 +621,15 @@ def main_pdf():
         usage="{:s} devicenum".format(sys.argv[0])
         print(usage)
         return
+    detection_hint=DetectionHint()
+    osr = OSR4Pdf(detection_hint)
+
     filename = sys.argv[1]
-    osr = OSR4Pdf(filename)
-    osr.detect_with_gui()
+    original_pdffile = pypdf.PdfReader(filename)
+    logfilename = "/tmp/x.zip"
+    filepathmanager = FilepathManager(logfilename)
+    with zipfile.ZipFile(filepathmanager.get_zipfilepath(),'w') as myzip:
+        osr.detect_pdf(original_pdffile,myzip,filepathmanager)
 
 def main():
     if len(sys.argv) < 2:
