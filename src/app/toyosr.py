@@ -15,16 +15,52 @@ class OneCharRecognizer:
         self.model_file = model_file
         self.net = None
 
+    def minimize_margin(self,box_img):
+        s_v = numpy.sum(box_img,axis=1)
+        av_v = (numpy.average(s_v)*1+max(s_v)*3)/4
+        ind_v = [i for i,si in enumerate(s_v) if si < av_v]
+        max_height = len(s_v)
+        height = int( min(len(ind_v)*1.4,max_height))
+
+        s_h = numpy.sum(box_img,axis=0)
+        av_h = (numpy.average(s_h)*1+max(s_h)*2)/3
+        ind_h =  [i for i,si in enumerate(s_h) if si < av_h]
+        max_width = len(s_h)
+        width = int(min(len(ind_h)*1.4,max_width))
+
+        if 3*width < height:
+            width=int(width+1*(height-width)/3)
+        elif width < 3*height:
+            height=int(height-1*(height-width)/3)
+        max_v=max(len([p for p in ind_v if i <= p and p < i+height]) for i in range(max_height-height))
+        cand_v = [i for i in range(max_height-height) if len([p for p in ind_v if i <= p and p < i+height]) == max_v ]
+        top = cand_v[len(cand_v)//2]
+        max_h=max(len([p for p in ind_h if i <= p and p < i+width]) for i in range(max_width-width))
+        cand_h = [i for i in range(max_width-width) if len([p for p in ind_h if i <= p and p < i+width]) == max_h]
+        left = cand_h[len(cand_h)//2]
+        box_img = box_img[top:top+height,left:left+width]
+        return box_img
+
     def detect_char(self,box_img):
         if self.net == None:
             self.net = cv2.dnn.readNetFromONNX(self.model_file)
+            
+        box_img = self.minimize_margin(box_img)
         target_img = cv2.resize(box_img,(28,28))
         target_img = cv2.bitwise_not(target_img)
-        target_img =  cv2.dnn.blobFromImage(target_img)
-        self.net.setInput(target_img)
+        target_blob =  cv2.dnn.blobFromImage(target_img)
+        self.net.setInput(target_blob)
         pred = numpy.squeeze(self.net.forward())
         ind = numpy.argsort(pred)
-        return int(ind[-1])
+
+        ans = int(ind[-1])
+
+        print(">",ans, ind)
+        cv2.imshow('scan image', target_img)
+        key =cv2.waitKey(0)
+
+        return ans
+
 
 class FilepathManager:
     def __init__(self,basezipname):
@@ -388,6 +424,7 @@ class OSRbase:
             preprocessed = self.get_preprocessed_box_img(box_img)
             num=self.detect_char(preprocessed,hint)
             detected_tokens.append(num)
+                    
         return(detected_tokens,box_coord)
 
     def perse_tokens_in_a_line(self,detected_tokens,format):
@@ -414,6 +451,7 @@ class OSRbase:
         (detected_tokens,box_coord)=self.detect_tokens_in_a_line(line_img,width,format)
         format = self.detection_hint.get_persing_hint_from_format_name(format_name)
         detected_data = self.perse_tokens_in_a_line(detected_tokens,format)
+
         return (detected_data,detected_tokens,box_coord)
     
     def detect_data_in_a_page(self,img):
@@ -439,11 +477,17 @@ class OSRbase:
 
     def get_table_data(self,detected_data):
         all_qid = []
+        has_qid_None=False
         for di in detected_data:
             qid = self.detection_hint.get_qid_from_detected_data_in_a_page(di)
+            if qid==None:
+                has_qid_None=True
+                continue
             if qid not in all_qid:
                 all_qid.append(qid)
         all_qid.sort()
+        if has_qid_None:
+            all_qid.append(None)
         all_sid = []
         for di in detected_data:
             sid = self.detection_hint.get_sid_from_detected_data_in_a_page(di)
@@ -473,7 +517,11 @@ class OSRbase:
 
         max_len_of_qid={}
         for qid in all_qid:
-            max_len_of_qid[qid]= max(len(di) for sid in all_sid for di in data_with_sid[sid][qid])
+            xxx = [len(di) for sid in all_sid for di in data_with_sid[sid][qid]]
+            if xxx == []:
+                max_len_of_qid[qid]=0
+            else:
+                max_len_of_qid[qid]= max(xxx)
 
         ans = []
         for sid in all_sid:
@@ -504,7 +552,7 @@ class OSRbase:
         return ans+"\n"
 
     def get_csv_line_str_from_detected_data(self,data):
-        ans = self.get_csv_line_str([ di[1] for di in data])
+        ans = self.get_csv_line_str([ di[1] if di != None else None for di in data])
         return ans
 
     def save_csv_lines_to_distribute(self,logzip,tablebody,header,filepathmanager):
@@ -553,8 +601,9 @@ class OSRbase:
     def save_partial_image_as_png(self,fileobj,img,top,bottom,left,right):
         mag = 5
         lineimg = img[top:bottom,left:right]
-        h=(bottom-top)//mag
-        w=(right-left)//mag
+        h=len(lineimg)//mag
+        w=len(lineimg[0])//mag
+        print(h,w,mag,bottom-top,right-left,right,left)
         lineimg = cv2.resize(lineimg,(w,h))
         (flag,buffer)=cv2.imencode(".png",lineimg)
         if flag:
